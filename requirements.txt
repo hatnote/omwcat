@@ -1,0 +1,4 @@
+Werkzeug==0.8.3
+argparse==1.2.1
+clastic==0.3.0
+wsgiref==0.1.2
