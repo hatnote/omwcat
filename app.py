@@ -15,7 +15,7 @@ from clastic import (redirect,
 from clastic.middleware.session import CookieSessionMiddleware
 
 CUR_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(CUR_DIR), 'config.json')
+DEFAULT_CONFIG_PATH = os.path.join(CUR_DIR, 'config.json')
 
 DEFAULT_IW_PREFIX = 'mw'
 DEFAULT_API_URL = 'https://test.wikipedia.org/w/api.php'
