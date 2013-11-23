@@ -61,14 +61,12 @@ def authorize(session, consumer_key, consumer_secret, token_key, token_secret):
     return redirect(redirect_url)
 
 
-def create_app(config_path=None):
+def create_app(consumer_key, consumer_secret):
     routes = [('/', lambda: 'hi', default_response),
               ('/auth/authorize', authorize, default_response)]
-    config_path = config_path or DEFAULT_CONFIG_PATH
-    config = json.load(open(config_path))
-    resources = {'config': config,
-                 'consumer_key': config['consumer_key'],
-                 'consumer_secret': config['consumer_secret']}
+
+    resources = {'consumer_key': consumer_key,
+                 'consumer_secret': consumer_secret}
 
     middlewares = [GetParamMiddleware(['oauth_verifier']),
                    CookieSessionMiddleware(),
@@ -76,8 +74,12 @@ def create_app(config_path=None):
     return Application(routes, resources, middlewares=middlewares)
 
 
-def main():
-    app = create_app()
+def main(config_path=None):
+    config_path = config_path or DEFAULT_CONFIG_PATH
+    config = json.load(open(config_path))
+    consumer_key = config['consumer_key']
+    consumer_secret = config['consumer_secret']
+    app = create_app(consumer_key, consumer_secret)
     app.serve()
 
 
