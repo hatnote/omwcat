@@ -86,11 +86,16 @@ def authorize(cookie, consumer_key, consumer_secret, token_key, token_secret):
 
 def home(session):
     import time
-    last_time = session.get('last_time')
-    session['last_time'] = time.time()
-    if last_time is None:
-        return 'Howdy, greenhorn.'
-    return 'Last visited %.2f seconds ago.' % (time.time() - last_time)
+    times = session.setdefault('times', [])
+    times.append(time.time())
+    if len(times) < 2:
+        return 'Waiting for another beat...'
+    elif len(times) > 10:
+        times = times[-10:]
+    total_time = times[-1] - times[0]
+    bps = total_time / len(times)
+    session['times'] = times
+    return '%.2f beats per minute' % (60 / bps)
 
 
 def create_app(consumer_key, consumer_secret):
