@@ -7,12 +7,14 @@ from pprint import pformat
 
 import httplib2
 import oauth2 as oauth
+from werkzeug.contrib.sessions import FilesystemSessionStore
+
 from clastic import (redirect,
                      Middleware,
                      Application,
                      default_response,
                      GetParamMiddleware)
-from clastic.middleware.session import CookieSessionMiddleware
+from clastic.middleware.cookie import SignedCookieMiddleware
 
 CUR_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG_PATH = os.path.join(CUR_DIR, 'config.json')
@@ -27,12 +29,33 @@ DEFAULT_AUTHZ_URL = DEFAULT_BASE_URL + '/authorize'
 class SessionTokenMiddleware(Middleware):
     provides = ('token_key', 'token_secret')
 
-    def request(self, next, session):
-        return next(token_key=session.get('token_key'),
-                    token_secret=session.get('token_secret'))
+    def request(self, next, cookie):
+        return next(token_key=cookie.get('token_key'),
+                    token_secret=cookie.get('token_secret'))
 
 
-def authorize(session, consumer_key, consumer_secret, token_key, token_secret):
+class SessionMiddleware(Middleware):
+    provides = ('session',)
+
+    def __init__(self, session_store=None):
+        if session_store is None:
+            session_store = FilesystemSessionStore()
+        self.session_store = session_store
+
+    def request(self, next, cookie):
+        session_id = cookie.get('session_id')
+        if session_id is None:
+            session = self.session_store.new()
+        else:
+            session = self.session_store.get(session_id)
+        ret = next(session=session)
+        if session.should_save:
+            self.session_store.save(session)
+            cookie['session_id'] = session.sid
+        return ret
+
+
+def authorize(cookie, consumer_key, consumer_secret, token_key, token_secret):
     consumer = oauth.Consumer(consumer_key, consumer_secret)
     client = oauth.Client(consumer)
     client.disable_ssl_certificate_validation = True
@@ -53,24 +76,34 @@ def authorize(session, consumer_key, consumer_secret, token_key, token_secret):
     except:
         return ('request token step failed: %s\n\nheaders, etc.: %s'
                 % (content, pformat(resp)))
-    session['token_key'] = new_token_key
-    #session['token_secret'] = new_token_secret  # store this somewhere
+    cookie['token_key'] = new_token_key
+    #cookie['token_secret'] = new_token_secret  # store this somewhere
     suffix = ('&oauth_token=%s&oauth_consumer_key=%s'
               % (new_token_key, consumer_key))
     redirect_url = DEFAULT_AUTHZ_URL + suffix
     return redirect(redirect_url)
 
 
+def home(session):
+    import time
+    last_time = session.get('last_time')
+    session['last_time'] = time.time()
+    if last_time is None:
+        return 'Howdy, greenhorn.'
+    return 'Last visited %.2f seconds ago.' % (time.time() - last_time)
+
+
 def create_app(consumer_key, consumer_secret):
-    routes = [('/', lambda: 'hi', default_response),
+    routes = [('/', home, default_response),
               ('/auth/authorize', authorize, default_response)]
 
     resources = {'consumer_key': consumer_key,
                  'consumer_secret': consumer_secret}
 
     middlewares = [GetParamMiddleware(['oauth_verifier']),
-                   CookieSessionMiddleware(),
-                   SessionTokenMiddleware()]
+                   SignedCookieMiddleware(),
+                   SessionTokenMiddleware(),
+                   SessionMiddleware()]
     return Application(routes, resources, middlewares=middlewares)
 
 
