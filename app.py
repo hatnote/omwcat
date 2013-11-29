@@ -12,26 +12,19 @@ from werkzeug.contrib.sessions import FilesystemSessionStore
 from clastic import (redirect,
                      Middleware,
                      Application,
-                     default_response,
+                     render_basic,
                      GetParamMiddleware)
 from clastic.middleware.cookie import SignedCookieMiddleware
 
 CUR_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_CONFIG_PATH = os.path.join(CUR_DIR, 'config.json')
+DEFAULT_CONFIG_PATH = os.path.join(CUR_DIR, 'config.dev.json')
 
 DEFAULT_IW_PREFIX = 'mw'
-DEFAULT_API_URL = 'https://test.wikipedia.org/w/api.php'
+DEFAULT_API_URL = 'https://www.mediawiki.org/w/api.php'
 DEFAULT_BASE_URL = 'https://www.mediawiki.org/w/index.php?title=Special:OAuth'
 DEFAULT_REQ_TOKEN_URL = DEFAULT_BASE_URL + '/initiate'
 DEFAULT_AUTHZ_URL = DEFAULT_BASE_URL + '/authorize'
-
-
-class SessionTokenMiddleware(Middleware):
-    provides = ('token_key', 'token_secret')
-
-    def request(self, next, cookie):
-        return next(token_key=cookie.get('token_key'),
-                    token_secret=cookie.get('token_secret'))
+DEFAULT_TOKEN_URL = DEFAULT_BASE_URL + '/token'
 
 
 class SessionMiddleware(Middleware):
@@ -55,7 +48,7 @@ class SessionMiddleware(Middleware):
         return ret
 
 
-def authorize(cookie, consumer_key, consumer_secret, token_key, token_secret):
+def authorize(session, consumer_key, consumer_secret):
     consumer = oauth.Consumer(consumer_key, consumer_secret)
     client = oauth.Client(consumer)
     client.disable_ssl_certificate_validation = True
@@ -76,12 +69,67 @@ def authorize(cookie, consumer_key, consumer_secret, token_key, token_secret):
     except:
         return ('request token step failed: %s\n\nheaders, etc.: %s'
                 % (content, pformat(resp)))
-    cookie['token_key'] = new_token_key
-    #cookie['token_secret'] = new_token_secret  # store this somewhere
+    session['token_key'] = new_token_key
+    session['token_secret'] = new_token_secret
     suffix = ('&oauth_token=%s&oauth_consumer_key=%s'
               % (new_token_key, consumer_key))
     redirect_url = DEFAULT_AUTHZ_URL + suffix
     return redirect(redirect_url)
+
+
+def authorize_complete(session, consumer_key, consumer_secret,
+                       oauth_verifier, oauth_token):
+    consumer = oauth.Consumer(consumer_key, consumer_secret)
+    client = oauth.Client(consumer)
+    client.disable_ssl_certificate_validation = True
+    params = {'format': 'json',
+              'oauth_verifier': oauth_verifier,
+              'oauth_token': oauth_token,
+              'oauth_version': '1.0',
+              'oauth_nonce': oauth.generate_nonce(),
+              'oauth_timestamp': int(time.time()),
+              'oauth_callback': 'oob'}  # :/
+    req = oauth.Request('GET', DEFAULT_REQ_TOKEN_URL, params)
+    signing_method = oauth.SignatureMethod_HMAC_SHA1()
+    req.sign_request(signing_method, consumer, None)
+    full_url = req.to_url()
+    # wow
+    resp, content = httplib2.Http.request(client, full_url, method='GET')
+    try:
+        resp_dict = json.loads(content)
+        new_token_key, new_token_secret = resp_dict['key'], resp_dict['secret']
+    except:
+        return ('request token step failed: %s\n\nheaders, etc.: %s'
+                % (content, pformat(resp)))
+    session['token_key'] = new_token_key
+    session['token_secret'] = new_token_secret
+    return content
+
+
+def get_user_info(session, consumer_key, consumer_secret):
+    token_key = session['token_key']
+    #token_secret = session['token_secret']
+
+    consumer = oauth.Consumer(consumer_key, consumer_secret)
+    client = oauth.Client(consumer)
+    client.disable_ssl_certificate_validation = True
+    params = {'format': 'json',
+              'action': 'query',
+              'meta': 'userinfo',
+
+              'oauth_token': token_key,
+              'oauth_version': '1.0',
+              'oauth_nonce': oauth.generate_nonce(),
+              'oauth_timestamp': int(time.time())}  # :/
+    req = oauth.Request('POST', DEFAULT_API_URL, params)
+    signing_method = oauth.SignatureMethod_HMAC_SHA1()
+    req.sign_request(signing_method, consumer, None)
+    full_url = req.to_url()
+    # wow
+    oauth_headers = req.to_header()
+    resp, content = httplib2.Http.request(client, DEFAULT_API_URL, headers=oauth_headers, method='POST')
+    import pdb;pdb.set_trace()
+    pass
 
 
 def home(session):
@@ -99,15 +147,16 @@ def home(session):
 
 
 def create_app(consumer_key, consumer_secret):
-    routes = [('/', home, default_response),
-              ('/auth/authorize', authorize, default_response)]
+    routes = [('/', home, render_basic),
+              ('/userinfo', get_user_info, render_basic),
+              ('/auth/authorize', authorize, render_basic),
+              ('/auth/callback', authorize_complete, render_basic)]
 
     resources = {'consumer_key': consumer_key,
                  'consumer_secret': consumer_secret}
 
-    middlewares = [GetParamMiddleware(['oauth_verifier']),
+    middlewares = [GetParamMiddleware(['oauth_verifier', 'oauth_token']),
                    SignedCookieMiddleware(),
-                   SessionTokenMiddleware(),
                    SessionMiddleware()]
     return Application(routes, resources, middlewares=middlewares)
 
