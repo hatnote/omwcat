@@ -1,6 +1,7 @@
-Werkzeug==0.8.3
+-e git+https://github.com/mahmoud/clastic.git#egg=clastic
+
+Werkzeug==0.9.4
 argparse==1.2.1
-clastic==0.3.0
 httplib2==0.8
 oauth2==1.5.211
 wsgiref==0.1.2
