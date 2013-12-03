@@ -27,6 +27,9 @@ DEFAULT_AUTHZ_URL = DEFAULT_BASE_URL + '/authorize'
 DEFAULT_TOKEN_URL = DEFAULT_BASE_URL + '/token'
 
 
+from rauth import OAuth1Service
+
+
 class SessionMiddleware(Middleware):
     provides = ('session',)
 
@@ -50,11 +53,11 @@ class SessionMiddleware(Middleware):
 
 class TokenMiddleware(Middleware):
     def request(self, next, session, oauth_verifier, oauth_token):
-
         pass
 
 
-def authorize(session, consumer_key, consumer_secret):
+def authorize(session, consumer_key, consumer_secret, mw_auth):
+    '''
     consumer = oauth.Consumer(consumer_key, consumer_secret)
     client = oauth.Client(consumer)
     client.disable_ssl_certificate_validation = True
@@ -79,12 +82,18 @@ def authorize(session, consumer_key, consumer_secret):
     session['token_secret'] = new_token_secret
     suffix = ('&oauth_token=%s&oauth_consumer_key=%s'
               % (new_token_key, consumer_key))
-    redirect_url = DEFAULT_AUTHZ_URL + suffix
-    return redirect(redirect_url)
+    '''
+    request_token, request_token_secret = mw_auth.get_request_token()
+    session['request_token'] = request_token
+    session['request_token_secret'] = request_token_secret
+    authorize_url = mw_auth.get_authorize_url(request_token)
+    print authorize_url
+    return redirect(authorize_url)
 
 
 def authorize_complete(session, consumer_key, consumer_secret,
-                       oauth_verifier, oauth_token):
+                       oauth_verifier, oauth_token, mw_auth):
+    '''
     consumer = oauth.Consumer(consumer_key, consumer_secret)
     client = oauth.Client(consumer)
     client.disable_ssl_certificate_validation = True
@@ -109,6 +118,15 @@ def authorize_complete(session, consumer_key, consumer_secret,
                 % (content, pformat(resp)))
     session['token_key'] = new_token_key
     session['token_secret'] = new_token_secret
+    '''
+    request_token = session['request_token']
+    request_token_secret = session['request_token_secret']
+
+    session = mw_auth.get_auth_session(request_token,
+                                       request_token_secret,
+                                       method='POST',
+                                       data={'oauth_verifier': oauth_verifier})
+    import pdb;pdb.set_trace()
     return content
 
 
@@ -159,7 +177,16 @@ def create_app(consumer_key, consumer_secret):
               ('/auth/authorize', authorize, render_basic),
               ('/auth/callback', authorize_complete, render_basic)]
 
-    resources = {'consumer_key': consumer_key,
+    mw_auth = OAuth1Service(name='mediawiki',
+                            consumer_key=consumer_key,
+                            consumer_secret=consumer_secret,
+                            request_token_url=DEFAULT_REQ_TOKEN_URL,
+                            authorize_url=DEFAULT_AUTHZ_URL,
+                            access_token_url=DEFAULT_TOKEN_URL,
+                            base_url=DEFAULT_API_URL)
+
+    resources = {'mw_auth': mw_auth,
+                 'consumer_key': consumer_key,
                  'consumer_secret': consumer_secret}
 
     middlewares = [GetParamMiddleware(['oauth_verifier', 'oauth_token']),
