@@ -48,6 +48,12 @@ class SessionMiddleware(Middleware):
         return ret
 
 
+class TokenMiddleware(Middleware):
+    def request(self, next, session, oauth_verifier, oauth_token):
+
+        pass
+
+
 def authorize(session, consumer_key, consumer_secret):
     consumer = oauth.Consumer(consumer_key, consumer_secret)
     client = oauth.Client(consumer)
@@ -121,15 +127,16 @@ def get_user_info(session, consumer_key, consumer_secret):
               'oauth_version': '1.0',
               'oauth_nonce': oauth.generate_nonce(),
               'oauth_timestamp': int(time.time())}  # :/
-    req = oauth.Request('POST', DEFAULT_API_URL, params)
+    req = oauth.Request('GET', DEFAULT_API_URL, params)
     signing_method = oauth.SignatureMethod_HMAC_SHA1()
     req.sign_request(signing_method, consumer, None)
     full_url = req.to_url()
-    # wow
     oauth_headers = req.to_header()
-    resp, content = httplib2.Http.request(client, DEFAULT_API_URL, headers=oauth_headers, method='POST')
-    import pdb;pdb.set_trace()
-    pass
+    resp, content = httplib2.Http.request(client, full_url, headers=oauth_headers, method='GET')
+    # wow
+    # import pdb;pdb.set_trace()
+    return content
+
 
 
 def home(session):
