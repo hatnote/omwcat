@@ -11,6 +11,7 @@ flask_oauth copyright 2010 by Armin Ronacher, BSD-licensed.
 
 import os
 import json
+import time
 from urlparse import urljoin
 
 import oauth2
@@ -95,20 +96,18 @@ class OAuthResponse(object):
 
 class OAuthClient(oauth2.Client):
     def request_new_token(self, uri, callback=None, params={}):
-        if callback is not None:
-            params['oauth_callback'] = callback
-        req = oauth2.Request.from_consumer_and_token(
-            self.consumer, token=self.token,
-            http_method='POST', http_url=uri, parameters=params,
-            is_form_encoded=True)
-        req.sign_request(self.method, self.consumer, self.token)
-        body = req.to_postdata()
-        headers = {
-            'Content-Type':     'application/x-www-form-urlencoded',
-            'Content-Length':   str(len(body))
-        }
-        return httplib2.Http.request(self, uri, method='POST',
-                                     body=body, headers=headers)
+        base_params = {'format': 'json',
+                       'oauth_version': '1.0',
+                       'oauth_nonce': oauth2.generate_nonce(),
+                       'oauth_timestamp': int(time.time()),
+                       'oauth_callback': 'oob'}  # :/
+        params = dict(base_params, **params)
+        req = oauth2.Request('GET', uri, params)
+        signing_method = oauth2.SignatureMethod_HMAC_SHA1()
+        req.sign_request(signing_method, self.consumer, None)
+        full_url = req.to_url()
+        # wow
+        return httplib2.Http.request(self, full_url, method='GET')
 
 
 class OAuthException(RuntimeError):
@@ -128,6 +127,10 @@ class OAuthException(RuntimeError):
 
 
 class InvalidOAuthResponse(OAuthException):
+    pass
+
+
+class OAuthTokenGenerationError(OAuthException):
     pass
 
 
@@ -167,7 +170,8 @@ class OAuthRemoteApp(object):
                  consumer_key, consumer_secret,
                  request_token_params=None,
                  access_token_params=None,
-                 access_token_method='GET'):
+                 access_token_method='GET',
+                 verify_certs=True):
         #: the `base_url` all URLs are joined with.
         self.base_url = base_url
         self.name = name
@@ -183,6 +187,9 @@ class OAuthRemoteApp(object):
         self._consumer = oauth2.Consumer(self.consumer_key,
                                          self.consumer_secret)
         self._client = OAuthClient(self._consumer)
+        self.verify_certs = verify_certs
+        if not self.verify_certs:
+            self._client.disable_ssl_certificate_validation = True
 
     def get(self, *args, **kwargs):
         """Sends a ``GET`` request.  Accepts the same parameters as
@@ -212,8 +219,39 @@ class OAuthRemoteApp(object):
         kwargs['method'] = 'DELETE'
         return self.request(*args, **kwargs)
 
-    def request(self, url, data="", headers=None, format='urlencoded',
-                method='GET', content_type=None, token=None):
+    def expand_url(self, url):
+        return urljoin(self.base_url, url)
+
+    def generate_request_token(self, callback=None):
+        #if callback is not None:
+        #    callback = urljoin(request.url, callback)
+        expanded_url = self.expand_url(self.request_token_url)
+        client = self._client
+        resp, content = client.request_new_token(expanded_url,
+                                                 callback,
+                                                 self.request_token_params)
+        if not _status_okay(resp):
+            raise OAuthTokenGenerationError('Failed to generate request token')
+        data = parse_response(resp, content)
+        try:
+            oauth_token, oauth_token_secret = data['key'], data['secret']
+            return oauth_token, oauth_token_secret
+        except KeyError:
+            raise OAuthTokenGenerationError('Invalid token response from %s'
+                                            % self.name, data=data)
+
+    def make_client(self, token=None):
+        """Creates a new `oauth2` Client object with the token attached.
+        Usually you don't have to do that but use the :meth:`request`
+        method instead.
+        """
+        ret = oauth2.Client(self._consumer, self.get_request_token(token))
+        if not self.verify_certs:
+            ret.disable_ssl_certificate_validation = True
+        return ret
+
+    def request(self, url, token, data="", headers=None, format='urlencoded',
+                method='GET', content_type=None):
         """Sends a request to the remote server with OAuth tokens attached.
         The `url` is joined with :attr:`base_url` if the URL is relative.
 
@@ -221,6 +259,7 @@ class OAuthRemoteApp(object):
            added the `token` parameter.
 
         :param url: where to send the request to
+        :param token: token as pulled from the session or somesuch
         :param data: the data to be sent to the server.  If the request method
                      is ``GET`` the data is appended to the URL as query
                      parameters, otherwise encoded to `format` if the format
@@ -234,12 +273,7 @@ class OAuthRemoteApp(object):
         :param content_type: an optional content type.  If a content type is
                              provided, the data is passed as it and the
                              `format` parameter is ignored.
-        :param token: an optional token to pass to tokengetter. Use this if you
-                      want to support sending requests using multiple tokens.
-                      If you set this to anything not None, `tokengetter_func`
-                      will receive the given token as an argument, in which case
-                      the tokengetter should return the `(token, secret)` tuple
-                      for the given token.
+
         :return: an :class:`OAuthResponse` object.
         """
         headers = dict(headers or {})
@@ -258,3 +292,50 @@ class OAuthRemoteApp(object):
         return OAuthResponse(*client.request(url, method=method,
                                              body=data or '',
                                              headers=headers))
+
+
+def login(mwoauth):
+    redirector = mwoauth.authorize()
+    redirector.headers['Location'] += ("&oauth_consumer_key=%s"
+                                       % mwoauth.consumer_key)
+    return redirector
+
+
+def handle_oauth1_response(self, request, mwoauth):
+    oauth_verifier = request.args.get('oauth_verifier')
+    if oauth_verifier is None:
+        raise OAuthException()
+    client = mwoauth.make_client()
+    expanded_url = mwoauth.expand_url(mwoauth.access_token_url)
+    verify_url = '%s&oauth_verifier=%s' % (expanded_url, oauth_verifier)
+    resp, content = client.request(verify_url, mwoauth.access_token_method)
+    print resp, content
+    data = parse_response(resp, content)
+    if not _status_okay(resp):
+        raise InvalidOAuthResponse('Invalid response from ' + mwoauth.name,
+                                   data=data)
+    return data
+
+
+ROOT_SITE_URL = 'https://www.mediawiki.org/w'
+BASE_URL = ROOT_SITE_URL.rstrip('/') + '/index.php'
+ACCESS_TOKEN_URL = BASE_URL + "?title=Special:OAuth/token"
+AUTHORIZE_URL = BASE_URL + '?title=Special:OAuth/authorize'
+REQ_TOKEN_PARAMS = {'title': 'Special:OAuth/initiate',
+                    'oauth_callback': 'oob'}
+C_KEY = '42c3cf1f0c83439abc8b61d0df52a197'
+C_SECRET = ''
+
+
+mwoauth = OAuthRemoteApp('mw.org',
+                         base_url=BASE_URL,
+                         request_token_url=BASE_URL,
+                         request_token_params=REQ_TOKEN_PARAMS,
+                         access_token_url=ACCESS_TOKEN_URL,
+                         authorize_url=AUTHORIZE_URL,
+                         consumer_key=C_KEY,
+                         consumer_secret=C_SECRET,
+                         verify_certs=False)
+
+
+mwoauth.generate_request_token()
