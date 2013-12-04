@@ -3,11 +3,14 @@
 import os
 import json
 import time
+import urllib
 from pprint import pformat
+
 
 import httplib2
 import oauth2 as oauth
 from werkzeug.contrib.sessions import FilesystemSessionStore
+from werkzeug import url_decode  # tmp
 
 from clastic import (redirect,
                      Middleware,
@@ -86,18 +89,23 @@ def authorize(session, consumer_key, consumer_secret):
 def authorize_complete(session, consumer_key, consumer_secret,
                        oauth_verifier, oauth_token):
     consumer = oauth.Consumer(consumer_key, consumer_secret)
-    client = oauth.Client(consumer)
+    req_token, req_token_secret = session['token_key'], session['token_secret']
+    token = oauth.Token(req_token, req_token_secret)
+    token.set_verifier(oauth_verifier)
+
+    client = oauth.Client(consumer, token)
     client.disable_ssl_certificate_validation = True
+
     params = {'format': 'json',
-              'oauth_verifier': oauth_verifier,
-              'oauth_token': oauth_token,
               'oauth_version': '1.0',
               'oauth_nonce': oauth.generate_nonce(),
               'oauth_timestamp': int(time.time()),
-              'oauth_callback': 'oob'}  # :/
-    req = oauth.Request('GET', DEFAULT_REQ_TOKEN_URL, params)
+              'oauth_verifier': oauth_verifier,
+              'oauth_callback': 'oob'}   # wow, all these keys are really necessary
+    # otherwise you get a really opaque '{"error":"mwoauth-oauth-exception"}'
+    req = oauth.Request('GET', DEFAULT_TOKEN_URL, params)
     signing_method = oauth.SignatureMethod_HMAC_SHA1()
-    req.sign_request(signing_method, consumer, None)
+    req.sign_request(signing_method, consumer, token)
     full_url = req.to_url()
     # wow
     resp, content = httplib2.Http.request(client, full_url, method='GET')
@@ -112,29 +120,33 @@ def authorize_complete(session, consumer_key, consumer_secret,
     return content
 
 
+def authorize_callback(session, consumer_key, consumer_secret,
+                       oauth_verifier, oauth_token):
+    authorize_complete_content = authorize_complete(session,
+                                                    consumer_key,
+                                                    consumer_secret,
+                                                    oauth_verifier,
+                                                    oauth_token)
+    return get_user_info(session, consumer_key, consumer_secret)
+
+
 def get_user_info(session, consumer_key, consumer_secret):
-    token_key = session['token_key']
-    #token_secret = session['token_secret']
+    api_args = {'format': 'json',
+                'action': 'query',
+                'meta': 'userinfo'}
+    api_url = DEFAULT_API_URL + "?" + urllib.urlencode(api_args)
 
     consumer = oauth.Consumer(consumer_key, consumer_secret)
-    client = oauth.Client(consumer)
-    client.disable_ssl_certificate_validation = True
-    params = {'format': 'json',
-              'action': 'query',
-              'meta': 'userinfo',
+    token = oauth.Token(session['token_key'], session['token_secret'])
 
-              'oauth_token': token_key,
-              'oauth_version': '1.0',
-              'oauth_nonce': oauth.generate_nonce(),
-              'oauth_timestamp': int(time.time())}  # :/
-    req = oauth.Request('GET', DEFAULT_API_URL, params)
-    signing_method = oauth.SignatureMethod_HMAC_SHA1()
-    req.sign_request(signing_method, consumer, None)
-    full_url = req.to_url()
-    oauth_headers = req.to_header()
-    resp, content = httplib2.Http.request(client, full_url, headers=oauth_headers, method='GET')
+    client = oauth.Client(consumer, token)
+    client.disable_ssl_certificate_validation = True
+    #params = {'oauth_version': '1.0',
+    #          'oauth_nonce': oauth.generate_nonce(),
+    #          'oauth_timestamp': int(time.time())}  # :/
+    resp, content = client.request(api_url, method='POST', body='', headers={'Content-Type': 'text/plain'})
     # wow
-    # import pdb;pdb.set_trace()
+    import pdb;pdb.set_trace()
     return content
 
 
@@ -157,7 +169,7 @@ def create_app(consumer_key, consumer_secret):
     routes = [('/', home, render_basic),
               ('/userinfo', get_user_info, render_basic),
               ('/auth/authorize', authorize, render_basic),
-              ('/auth/callback', authorize_complete, render_basic)]
+              ('/auth/callback', authorize_callback, render_basic)]
 
     resources = {'consumer_key': consumer_key,
                  'consumer_secret': consumer_secret}
