@@ -6,11 +6,9 @@ import time
 import urllib
 from pprint import pformat
 
-
 import httplib2
 import oauth2 as oauth
 from werkzeug.contrib.sessions import FilesystemSessionStore
-from werkzeug import url_decode  # tmp
 
 from clastic import (redirect,
                      Middleware,
@@ -53,13 +51,11 @@ class SessionMiddleware(Middleware):
 
 class TokenMiddleware(Middleware):
     def request(self, next, session, oauth_verifier, oauth_token):
-
         pass
 
 
-def authorize(session, consumer_key, consumer_secret):
-    consumer = oauth.Consumer(consumer_key, consumer_secret)
-    client = oauth.Client(consumer)
+def authorize(session, oa_consumer, oa_consumer_key):
+    client = oauth.Client(oa_consumer)
     client.disable_ssl_certificate_validation = True
     params = {'format': 'json',
               'oauth_version': '1.0',
@@ -68,7 +64,7 @@ def authorize(session, consumer_key, consumer_secret):
               'oauth_callback': 'oob'}  # :/
     req = oauth.Request('GET', DEFAULT_REQ_TOKEN_URL, params)
     signing_method = oauth.SignatureMethod_HMAC_SHA1()
-    req.sign_request(signing_method, consumer, None)
+    req.sign_request(signing_method, oa_consumer, None)
     full_url = req.to_url()
     # wow
     resp, content = httplib2.Http.request(client, full_url, method='GET')
@@ -81,19 +77,17 @@ def authorize(session, consumer_key, consumer_secret):
     session['token_key'] = new_token_key
     session['token_secret'] = new_token_secret
     suffix = ('&oauth_token=%s&oauth_consumer_key=%s'
-              % (new_token_key, consumer_key))
+              % (new_token_key, oa_consumer_key))
     redirect_url = DEFAULT_AUTHZ_URL + suffix
     return redirect(redirect_url)
 
 
-def authorize_complete(session, consumer_key, consumer_secret,
-                       oauth_verifier, oauth_token):
-    consumer = oauth.Consumer(consumer_key, consumer_secret)
+def authorize_complete(session, oa_consumer, oauth_verifier, oauth_token):
     req_token, req_token_secret = session['token_key'], session['token_secret']
     token = oauth.Token(req_token, req_token_secret)
     token.set_verifier(oauth_verifier)
 
-    client = oauth.Client(consumer, token)
+    client = oauth.Client(oa_consumer, token)
     client.disable_ssl_certificate_validation = True
 
     params = {'format': 'json',
@@ -105,7 +99,7 @@ def authorize_complete(session, consumer_key, consumer_secret,
     # otherwise you get a really opaque '{"error":"mwoauth-oauth-exception"}'
     req = oauth.Request('GET', DEFAULT_TOKEN_URL, params)
     signing_method = oauth.SignatureMethod_HMAC_SHA1()
-    req.sign_request(signing_method, consumer, token)
+    req.sign_request(signing_method, oa_consumer, token)
     full_url = req.to_url()
     # wow
     resp, content = httplib2.Http.request(client, full_url, method='GET')
@@ -120,35 +114,29 @@ def authorize_complete(session, consumer_key, consumer_secret,
     return content
 
 
-def authorize_callback(session, consumer_key, consumer_secret,
-                       oauth_verifier, oauth_token):
+def authorize_callback(session, oa_consumer, oauth_verifier, oauth_token):
     authorize_complete_content = authorize_complete(session,
-                                                    consumer_key,
-                                                    consumer_secret,
+                                                    oa_consumer,
                                                     oauth_verifier,
                                                     oauth_token)
-    return get_user_info(session, consumer_key, consumer_secret)
+    return get_user_info(session, oa_consumer)
 
 
-def get_user_info(session, consumer_key, consumer_secret):
+def get_user_info(session, oa_consumer):
     api_args = {'format': 'json',
                 'action': 'query',
                 'meta': 'userinfo'}
     api_url = DEFAULT_API_URL + "?" + urllib.urlencode(api_args)
-
-    consumer = oauth.Consumer(consumer_key, consumer_secret)
     token = oauth.Token(session['token_key'], session['token_secret'])
 
-    client = oauth.Client(consumer, token)
+    client = oauth.Client(oa_consumer, token)
     client.disable_ssl_certificate_validation = True
     #params = {'oauth_version': '1.0',
     #          'oauth_nonce': oauth.generate_nonce(),
     #          'oauth_timestamp': int(time.time())}  # :/
     resp, content = client.request(api_url, method='POST', body='', headers={'Content-Type': 'text/plain'})
     # wow
-    import pdb;pdb.set_trace()
     return content
-
 
 
 def home(session):
@@ -171,8 +159,9 @@ def create_app(consumer_key, consumer_secret):
               ('/auth/authorize', authorize, render_basic),
               ('/auth/callback', authorize_callback, render_basic)]
 
-    resources = {'consumer_key': consumer_key,
-                 'consumer_secret': consumer_secret}
+    resources = {'oa_consumer_key': consumer_key,
+                 'oa_consumer_secret': consumer_secret,
+                 'oa_consumer': oauth.Consumer(consumer_key, consumer_secret)}
 
     middlewares = [GetParamMiddleware(['oauth_verifier', 'oauth_token']),
                    SignedCookieMiddleware(),
