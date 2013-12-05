@@ -54,68 +54,90 @@ class TokenMiddleware(Middleware):
         pass
 
 
-def authorize(session, oa_consumer, oa_consumer_key):
-    client = oauth.Client(oa_consumer)
-    client.disable_ssl_certificate_validation = True
+# get request token, save in session
+# redirect to auth url
+# retrieve request token from session
+# using verifier, build access token request
+# get access token, save to session
+
+
+def get_request_token(consumer,
+                      request_token_url=DEFAULT_REQ_TOKEN_URL,
+                      validate_certs=True):
+    client = oauth.Client(consumer)
+    client.disable_ssl_certificate_validation = not validate_certs
     params = {'format': 'json',
               'oauth_version': '1.0',
               'oauth_nonce': oauth.generate_nonce(),
               'oauth_timestamp': int(time.time()),
               'oauth_callback': 'oob'}  # :/
-    req = oauth.Request('GET', DEFAULT_REQ_TOKEN_URL, params)
+    req = oauth.Request('GET', request_token_url, params)
     signing_method = oauth.SignatureMethod_HMAC_SHA1()
-    req.sign_request(signing_method, oa_consumer, None)
+    req.sign_request(signing_method, consumer, None)
     full_url = req.to_url()
-    # wow
     resp, content = httplib2.Http.request(client, full_url, method='GET')
     try:
         resp_dict = json.loads(content)
-        new_token_key, new_token_secret = resp_dict['key'], resp_dict['secret']
+        req_token_key, req_token_secret = resp_dict['key'], resp_dict['secret']
     except:
-        return ('request token step failed: %s\n\nheaders, etc.: %s'
-                % (content, pformat(resp)))
-    session['token_key'] = new_token_key
-    session['token_secret'] = new_token_secret
-    suffix = ('&oauth_token=%s&oauth_consumer_key=%s'
-              % (new_token_key, oa_consumer_key))
-    redirect_url = DEFAULT_AUTHZ_URL + suffix
-    return redirect(redirect_url)
+        raise ValueError('request token step failed: %s\n\nheaders, etc.: %s'
+                         % (content, pformat(resp)))
+    return req_token_key, req_token_secret
 
 
-def make_oauth_request(consumer, url, token=None,
-                       oauth_verifier=None, validate_certs=True):
-    pass
-
-def authorize_complete(session, oa_consumer, oauth_verifier, oauth_token):
-    req_token, req_token_secret = session['token_key'], session['token_secret']
-    token = oauth.Token(req_token, req_token_secret)
-
-    client = oauth.Client(oa_consumer, token)
-    client.disable_ssl_certificate_validation = True
+def get_access_token(consumer, req_token_key, req_token_secret, verifier,
+                     access_token_url=DEFAULT_TOKEN_URL, validate_certs=True):
+    request_token = oauth.Token(req_token_key, req_token_secret)
+    client = oauth.Client(consumer, request_token)
+    client.disable_ssl_certificate_validation = not validate_certs
 
     params = {'format': 'json',
               'oauth_version': '1.0',
               'oauth_nonce': oauth.generate_nonce(),
               'oauth_timestamp': int(time.time()),
-              'oauth_verifier': oauth_verifier,
+              'oauth_verifier': verifier,
               'oauth_callback': 'oob'}
     # wow, all those keys are really necessary
     # otherwise you get a really opaque '{"error":"mwoauth-oauth-exception"}'
     req = oauth.Request('GET', DEFAULT_TOKEN_URL, params)
     signing_method = oauth.SignatureMethod_HMAC_SHA1()
-    req.sign_request(signing_method, oa_consumer, token)
+    req.sign_request(signing_method, consumer, request_token)
     full_url = req.to_url()
     # wow
     resp, content = httplib2.Http.request(client, full_url, method='GET')
     try:
         resp_dict = json.loads(content)
-        new_token_key, new_token_secret = resp_dict['key'], resp_dict['secret']
+        acc_token_key, acc_token_secret = resp_dict['key'], resp_dict['secret']
     except:
-        return ('request token step failed: %s\n\nheaders, etc.: %s'
-                % (content, pformat(resp)))
-    session['token_key'] = new_token_key
-    session['token_secret'] = new_token_secret
-    return content
+        raise ValueError('access token step failed: %s\n\nheaders, etc.: %s'
+                         % (content, pformat(resp)))
+    return acc_token_key, acc_token_secret
+
+
+def authorize(session, oa_consumer, oa_consumer_key):
+    req_token_key, req_token_secret = get_request_token(oa_consumer,
+                                                        validate_certs=False)
+    session['token_key'] = req_token_key
+    session['token_secret'] = req_token_secret
+    suffix = ('&oauth_token=%s&oauth_consumer_key=%s'
+              % (req_token_key, oa_consumer_key))
+    redirect_url = DEFAULT_AUTHZ_URL + suffix
+    return redirect(redirect_url)
+
+
+def authorize_complete(session, oa_consumer, oauth_verifier, oauth_token):
+    req_token_key = session['token_key']
+    req_token_secret = session['token_secret']
+
+    acc_token_key, acc_token_secret = get_access_token(oa_consumer,
+                                                       req_token_key,
+                                                       req_token_secret,
+                                                       oauth_verifier,
+                                                       validate_certs=False)
+
+    session['token_key'] = acc_token_key
+    session['token_secret'] = acc_token_secret
+    return True
 
 
 def make_api_call(consumer, token, api_args, api_url=DEFAULT_API_URL):
