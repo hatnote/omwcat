@@ -82,10 +82,13 @@ def authorize(session, oa_consumer, oa_consumer_key):
     return redirect(redirect_url)
 
 
+def make_oauth_request(consumer, url, token=None,
+                       oauth_verifier=None, validate_certs=True):
+    pass
+
 def authorize_complete(session, oa_consumer, oauth_verifier, oauth_token):
     req_token, req_token_secret = session['token_key'], session['token_secret']
     token = oauth.Token(req_token, req_token_secret)
-    token.set_verifier(oauth_verifier)
 
     client = oauth.Client(oa_consumer, token)
     client.disable_ssl_certificate_validation = True
@@ -95,7 +98,8 @@ def authorize_complete(session, oa_consumer, oauth_verifier, oauth_token):
               'oauth_nonce': oauth.generate_nonce(),
               'oauth_timestamp': int(time.time()),
               'oauth_verifier': oauth_verifier,
-              'oauth_callback': 'oob'}   # wow, all these keys are really necessary
+              'oauth_callback': 'oob'}
+    # wow, all those keys are really necessary
     # otherwise you get a really opaque '{"error":"mwoauth-oauth-exception"}'
     req = oauth.Request('GET', DEFAULT_TOKEN_URL, params)
     signing_method = oauth.SignatureMethod_HMAC_SHA1()
@@ -114,28 +118,23 @@ def authorize_complete(session, oa_consumer, oauth_verifier, oauth_token):
     return content
 
 
-def authorize_callback(session, oa_consumer, oauth_verifier, oauth_token):
-    authorize_complete_content = authorize_complete(session,
-                                                    oa_consumer,
-                                                    oauth_verifier,
-                                                    oauth_token)
-    return get_user_info(session, oa_consumer)
+def make_api_call(consumer, token, api_args, api_url=DEFAULT_API_URL):
+    api_args['format'] = 'json'
+    full_url = api_url + "?" + urllib.urlencode(api_args)
+    client = oauth.Client(consumer, token)
+    client.disable_ssl_certificate_validation = True
+    resp, content = client.request(full_url,
+                                   method='POST',
+                                   body='',
+                                   headers={'Content-Type': 'text/plain'})
+    return content
 
 
 def get_user_info(session, oa_consumer):
-    api_args = {'format': 'json',
-                'action': 'query',
+    api_args = {'action': 'query',
                 'meta': 'userinfo'}
-    api_url = DEFAULT_API_URL + "?" + urllib.urlencode(api_args)
-    token = oauth.Token(session['token_key'], session['token_secret'])
-
-    client = oauth.Client(oa_consumer, token)
-    client.disable_ssl_certificate_validation = True
-    #params = {'oauth_version': '1.0',
-    #          'oauth_nonce': oauth.generate_nonce(),
-    #          'oauth_timestamp': int(time.time())}  # :/
-    resp, content = client.request(api_url, method='POST', body='', headers={'Content-Type': 'text/plain'})
-    # wow
+    oa_token = oauth.Token(session['token_key'], session['token_secret'])
+    content = make_api_call(oa_consumer, oa_token, api_args)
     return content
 
 
@@ -154,10 +153,11 @@ def home(session):
 
 
 def create_app(consumer_key, consumer_secret):
+    ui_redirector = lambda context: redirect('/userinfo')
     routes = [('/', home, render_basic),
               ('/userinfo', get_user_info, render_basic),
               ('/auth/authorize', authorize, render_basic),
-              ('/auth/callback', authorize_callback, render_basic)]
+              ('/auth/callback', authorize_complete, ui_redirector)]
 
     resources = {'oa_consumer_key': consumer_key,
                  'oa_consumer_secret': consumer_secret,
