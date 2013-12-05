@@ -4,10 +4,7 @@ import os
 import json
 import time
 import urllib
-from pprint import pformat
 
-import httplib2
-import oauth2 as oauth
 from werkzeug.contrib.sessions import FilesystemSessionStore
 
 from clastic import (redirect,
@@ -16,6 +13,8 @@ from clastic import (redirect,
                      render_basic,
                      GetParamMiddleware)
 from clastic.middleware.cookie import SignedCookieMiddleware
+
+from mwoauth import get_request_token, get_access_token, make_api_call
 
 CUR_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG_PATH = os.path.join(CUR_DIR, 'config.dev.json')
@@ -54,109 +53,53 @@ class TokenMiddleware(Middleware):
         pass
 
 
-# get request token, save in session
-# redirect to auth url
-# retrieve request token from session
-# using verifier, build access token request
-# get access token, save to session
-
-
-def get_request_token(consumer,
-                      request_token_url=DEFAULT_REQ_TOKEN_URL,
-                      validate_certs=True):
-    client = oauth.Client(consumer)
-    client.disable_ssl_certificate_validation = not validate_certs
-    params = {'format': 'json',
-              'oauth_version': '1.0',
-              'oauth_nonce': oauth.generate_nonce(),
-              'oauth_timestamp': int(time.time()),
-              'oauth_callback': 'oob'}  # :/
-    req = oauth.Request('GET', request_token_url, params)
-    signing_method = oauth.SignatureMethod_HMAC_SHA1()
-    req.sign_request(signing_method, consumer, None)
-    full_url = req.to_url()
-    resp, content = httplib2.Http.request(client, full_url, method='GET')
-    try:
-        resp_dict = json.loads(content)
-        req_token_key, req_token_secret = resp_dict['key'], resp_dict['secret']
-    except:
-        raise ValueError('request token step failed: %s\n\nheaders, etc.: %s'
-                         % (content, pformat(resp)))
-    return req_token_key, req_token_secret
-
-
-def get_access_token(consumer, req_token_key, req_token_secret, verifier,
-                     access_token_url=DEFAULT_TOKEN_URL, validate_certs=True):
-    request_token = oauth.Token(req_token_key, req_token_secret)
-    client = oauth.Client(consumer, request_token)
-    client.disable_ssl_certificate_validation = not validate_certs
-
-    params = {'format': 'json',
-              'oauth_version': '1.0',
-              'oauth_nonce': oauth.generate_nonce(),
-              'oauth_timestamp': int(time.time()),
-              'oauth_verifier': verifier,
-              'oauth_callback': 'oob'}
-    # wow, all those keys are really necessary
-    # otherwise you get a really opaque '{"error":"mwoauth-oauth-exception"}'
-    req = oauth.Request('GET', DEFAULT_TOKEN_URL, params)
-    signing_method = oauth.SignatureMethod_HMAC_SHA1()
-    req.sign_request(signing_method, consumer, request_token)
-    full_url = req.to_url()
-    # wow
-    resp, content = httplib2.Http.request(client, full_url, method='GET')
-    try:
-        resp_dict = json.loads(content)
-        acc_token_key, acc_token_secret = resp_dict['key'], resp_dict['secret']
-    except:
-        raise ValueError('access token step failed: %s\n\nheaders, etc.: %s'
-                         % (content, pformat(resp)))
-    return acc_token_key, acc_token_secret
-
-
-def authorize(session, oa_consumer, oa_consumer_key):
-    req_token_key, req_token_secret = get_request_token(oa_consumer,
+def authorize(session, consumer_key, consumer_secret,
+              authorize_token_url, request_token_url):
+    req_token_key, req_token_secret = get_request_token(consumer_key,
+                                                        consumer_secret,
+                                                        request_token_url,
                                                         validate_certs=False)
     session['token_key'] = req_token_key
     session['token_secret'] = req_token_secret
     suffix = ('&oauth_token=%s&oauth_consumer_key=%s'
-              % (req_token_key, oa_consumer_key))
-    redirect_url = DEFAULT_AUTHZ_URL + suffix
+              % (req_token_key, consumer_key))
+    redirect_url = authorize_token_url + suffix
     return redirect(redirect_url)
 
 
-def authorize_complete(session, oa_consumer, oauth_verifier, oauth_token):
+def authorize_complete(session,
+                       consumer_key,
+                       consumer_secret,
+                       access_token_url,
+                       oauth_verifier,
+                       oauth_token):
+    # TODO: assert this matches the oauth_token?
     req_token_key = session['token_key']
     req_token_secret = session['token_secret']
 
-    acc_token_key, acc_token_secret = get_access_token(oa_consumer,
+    acc_token_key, acc_token_secret = get_access_token(consumer_key,
+                                                       consumer_secret,
                                                        req_token_key,
                                                        req_token_secret,
                                                        oauth_verifier,
+                                                       access_token_url,
                                                        validate_certs=False)
-
     session['token_key'] = acc_token_key
     session['token_secret'] = acc_token_secret
     return True
 
 
-def make_api_call(consumer, token, api_args, api_url=DEFAULT_API_URL):
-    api_args['format'] = 'json'
-    full_url = api_url + "?" + urllib.urlencode(api_args)
-    client = oauth.Client(consumer, token)
-    client.disable_ssl_certificate_validation = True
-    resp, content = client.request(full_url,
-                                   method='POST',
-                                   body='',
-                                   headers={'Content-Type': 'text/plain'})
-    return content
-
-
-def get_user_info(session, oa_consumer):
+def get_user_info(session, consumer_key, consumer_secret, api_url):
     api_args = {'action': 'query',
                 'meta': 'userinfo'}
-    oa_token = oauth.Token(session['token_key'], session['token_secret'])
-    content = make_api_call(oa_consumer, oa_token, api_args)
+    access_token_key = session['token_key']
+    access_token_secret = session['token_secret']
+    content = make_api_call(consumer_key,
+                            consumer_secret,
+                            access_token_key,
+                            access_token_secret,
+                            api_args,
+                            api_url)
     return content
 
 
@@ -181,9 +124,12 @@ def create_app(consumer_key, consumer_secret):
               ('/auth/authorize', authorize, render_basic),
               ('/auth/callback', authorize_complete, ui_redirector)]
 
-    resources = {'oa_consumer_key': consumer_key,
-                 'oa_consumer_secret': consumer_secret,
-                 'oa_consumer': oauth.Consumer(consumer_key, consumer_secret)}
+    resources = {'consumer_key': consumer_key,
+                 'consumer_secret': consumer_secret,
+                 'request_token_url': DEFAULT_REQ_TOKEN_URL,
+                 'authorize_token_url': DEFAULT_AUTHZ_URL,
+                 'access_token_url': DEFAULT_TOKEN_URL,
+                 'api_url': DEFAULT_API_URL}
 
     middlewares = [GetParamMiddleware(['oauth_verifier', 'oauth_token']),
                    SignedCookieMiddleware(),
