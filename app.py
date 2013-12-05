@@ -2,8 +2,6 @@
 
 import os
 import json
-import time
-import urllib
 
 from werkzeug.contrib.sessions import FilesystemSessionStore
 
@@ -46,11 +44,6 @@ class SessionMiddleware(Middleware):
             self.session_store.save(session)
             cookie['session_id'] = session.sid
         return ret
-
-
-class TokenMiddleware(Middleware):
-    def request(self, next, session, oauth_verifier, oauth_token):
-        pass
 
 
 def authorize(session, consumer_key, consumer_secret,
