@@ -91,7 +91,7 @@ def get_user_info(session, consumer_key, consumer_secret, api_url):
                             consumer_secret,
                             access_token_key,
                             access_token_secret,
-                            'POST',
+                            'GET',
                             params,
                             api_url)
     return content

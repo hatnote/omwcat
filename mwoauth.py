@@ -25,7 +25,7 @@ def make_api_call(consumer_key,
                   method,
                   params,
                   api_url,
-                  body='',
+                  body=None,
                   headers=None):
 
     headers = dict(headers or {})
