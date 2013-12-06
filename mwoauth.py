@@ -6,6 +6,7 @@ import urllib
 
 import httplib2
 import oauth2 as oauth
+from oauthlib.oauth1 import Client as OAClient
 
 from pprint import pformat
 
@@ -15,14 +16,6 @@ from pprint import pformat
 # retrieve request token from session
 # using verifier, build access token request
 # get access token, save to session
-
-
-def _get_realm(url):
-    # not sure this is necessary, but just to be on the safe side
-    schema, rest = urllib.splittype(url)
-    hierpart = '//' if rest.startswith('//') else ''
-    host, rest = urllib.splithost(rest)
-    return schema + ':' + hierpart + host
 
 
 def make_api_call(consumer_key,
@@ -40,51 +33,25 @@ def make_api_call(consumer_key,
     params = dict(params, format='json')
     if method == 'GET':
         full_url = api_url + "?" + urllib.urlencode(params)
-        body = ''
-        is_form_encoded = False
     elif method == 'POST':
         full_url = api_url
         body = urllib.urlencode(params)
-        is_form_encoded = True
+        headers['Content-Type'] = 'application/x-www-form-urlencoded'
     else:
         raise ValueError('unsupported HTTP method %r' % method)
 
-    consumer = oauth.Consumer(consumer_key, consumer_secret)
-    token = oauth.Token(access_token_key, access_token_secret)
-    client = oauth.Client(consumer, token)
+    client = OAClient(consumer_key, client_secret=consumer_secret,
+                      resource_owner_key=access_token_key,
+                      resource_owner_secret=access_token_secret)
+    full_url, headers, body = client.sign(full_url, method, body, headers)
+
+    client = httplib2.Http()
     client.disable_ssl_certificate_validation = True
 
-    """
-    defaults = {'oauth_consumer_key': consumer.key,
-                'oauth_timestamp': cls.make_timestamp(),
-                'oauth_nonce': cls.make_nonce(),
-                'oauth_version': cls.version}
-
-    defaults.update(parameters)
-    parameters = defaults
-
-    if token:
-        parameters['oauth_token'] = token.key
-        if token.verifier:
-            parameters['oauth_verifier'] = token.verifier
-    """
-
-    req = oauth.Request.from_consumer_and_token(consumer,
-                                                token,
-                                                method,
-                                                full_url)
-                                                #params)
-                                                #body,
-                                                #is_form_encoded)
-    req.sign_request(client.method, consumer, token)  # wtf
-    #if method == 'POST':
-    #    body = req.to_postdata()
-    realm = _get_realm(full_url)
-    headers.update(req.to_header(realm=realm))
-    resp, content = httplib2.Http.request(client, full_url,
-                                          method=method,
-                                          body=body,
-                                          headers=headers)
+    resp, content = client.request(full_url,
+                                   method=method,
+                                   body=body,
+                                   headers=headers)
     return content
 
 
