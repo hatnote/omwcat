@@ -17,22 +17,43 @@ from pprint import pformat
 # get access token, save to session
 
 
+def _get_realm(url):
+    # not sure this is necessary, but just to be on the safe side
+    schema, rest = urllib.splittype(url)
+    hierpart = '//' if rest.startswith('//') else ''
+    host, rest = urllib.splithost(rest)
+    return schema + ':' + hierpart + host
+
+
 def make_api_call(consumer_key,
                   consumer_secret,
                   access_token_key,
                   access_token_secret,
                   api_args,
-                  api_url):
+                  api_url,
+                  headers=None):
+
+    GET = 'GET'
+    headers = dict(headers or {})
+    api_args = dict(api_args, format='json')
+    full_url = api_url + "?" + urllib.urlencode(api_args)
+
     consumer = oauth.Consumer(consumer_key, consumer_secret)
     token = oauth.Token(access_token_key, access_token_secret)
-    api_args['format'] = 'json'
-    full_url = api_url + "?" + urllib.urlencode(api_args)
     client = oauth.Client(consumer, token)
     client.disable_ssl_certificate_validation = True
-    resp, content = client.request(full_url,
-                                   method='POST',
-                                   body='',
-                                   headers={'Content-Type': 'text/plain'})
+
+    req = oauth.Request.from_consumer_and_token(consumer,
+                                                token,
+                                                GET,
+                                                full_url)
+    req.sign_request(client.method, consumer, token)  # wtf
+    realm = _get_realm(full_url)
+    headers.update(req.to_header(realm=realm))
+
+    resp, content = httplib2.Http.request(client, full_url, method=GET,
+                                          headers=headers)
+
     return content
 
 
