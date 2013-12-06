@@ -83,15 +83,16 @@ def authorize_complete(session,
 
 
 def get_user_info(session, consumer_key, consumer_secret, api_url):
-    api_args = {'action': 'query',
-                'meta': 'userinfo'}
+    params = {'action': 'query',
+              'meta': 'userinfo'}
     access_token_key = session['token_key']
     access_token_secret = session['token_secret']
     content = make_api_call(consumer_key,
                             consumer_secret,
                             access_token_key,
                             access_token_secret,
-                            api_args,
+                            'POST',
+                            params,
                             api_url)
     return content
 
@@ -125,7 +126,7 @@ def create_app(consumer_key, consumer_secret):
                  'api_url': DEFAULT_API_URL}
 
     middlewares = [GetParamMiddleware(['oauth_verifier', 'oauth_token']),
-                   SignedCookieMiddleware(),
+                   SignedCookieMiddleware(secret_key=consumer_secret),
                    SessionMiddleware()]
     return Application(routes, resources, middlewares=middlewares)
 
