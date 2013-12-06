@@ -29,14 +29,25 @@ def make_api_call(consumer_key,
                   consumer_secret,
                   access_token_key,
                   access_token_secret,
-                  api_args,
+                  method,
+                  params,
                   api_url,
+                  body='',
                   headers=None):
 
-    GET = 'GET'
     headers = dict(headers or {})
-    api_args = dict(api_args, format='json')
-    full_url = api_url + "?" + urllib.urlencode(api_args)
+    method = method.upper()
+    params = dict(params, format='json')
+    if method == 'GET':
+        full_url = api_url + "?" + urllib.urlencode(params)
+        body = ''
+        is_form_encoded = False
+    elif method == 'POST':
+        full_url = api_url
+        body = urllib.urlencode(params)
+        is_form_encoded = True
+    else:
+        raise ValueError('unsupported HTTP method %r' % method)
 
     consumer = oauth.Consumer(consumer_key, consumer_secret)
     token = oauth.Token(access_token_key, access_token_secret)
@@ -45,15 +56,19 @@ def make_api_call(consumer_key,
 
     req = oauth.Request.from_consumer_and_token(consumer,
                                                 token,
-                                                GET,
-                                                full_url)
+                                                method,
+                                                full_url,
+                                                params,
+                                                body,
+                                                is_form_encoded)
     req.sign_request(client.method, consumer, token)  # wtf
     realm = _get_realm(full_url)
     headers.update(req.to_header(realm=realm))
 
-    resp, content = httplib2.Http.request(client, full_url, method=GET,
+    resp, content = httplib2.Http.request(client, full_url,
+                                          method=method,
+                                          body=body,
                                           headers=headers)
-
     return content
 
 
