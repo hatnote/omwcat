@@ -54,17 +54,33 @@ def make_api_call(consumer_key,
     client = oauth.Client(consumer, token)
     client.disable_ssl_certificate_validation = True
 
+    """
+    defaults = {'oauth_consumer_key': consumer.key,
+                'oauth_timestamp': cls.make_timestamp(),
+                'oauth_nonce': cls.make_nonce(),
+                'oauth_version': cls.version}
+
+    defaults.update(parameters)
+    parameters = defaults
+
+    if token:
+        parameters['oauth_token'] = token.key
+        if token.verifier:
+            parameters['oauth_verifier'] = token.verifier
+    """
+
     req = oauth.Request.from_consumer_and_token(consumer,
                                                 token,
                                                 method,
-                                                full_url,
-                                                params,
-                                                body,
-                                                is_form_encoded)
+                                                full_url)
+                                                #params)
+                                                #body,
+                                                #is_form_encoded)
     req.sign_request(client.method, consumer, token)  # wtf
+    #if method == 'POST':
+    #    body = req.to_postdata()
     realm = _get_realm(full_url)
     headers.update(req.to_header(realm=realm))
-
     resp, content = httplib2.Http.request(client, full_url,
                                           method=method,
                                           body=body,
