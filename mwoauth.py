@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import json
-import time
 import urllib
 
 import httplib2
-import oauth2 as oauth
 
 import oauthlib
 from oauthlib.oauth1 import Client as OAClient
@@ -22,7 +20,15 @@ from pprint import pformat
 
 try:
     oauthlib.common.urlencoded.add(':')  # idc anymore
-    oauthlib.common.urlencoded.add('/')  # idc anymore
+    oauthlib.common.urlencoded.add('/')
+    """
+    people need to read RFCs and realize that different characters are
+    safe/unsafe in different parts of the URL. colon and slash are
+    allowed in the query string, but oauthlib does a proactive check
+    on the query string that includes checking for these fine
+    characters, and if they're found, your string is deemed to be
+    invalidly urlencoded. Not cool.
+    """
 except:
     raise
 
@@ -70,13 +76,14 @@ def get_request_token(consumer_key,
                       validate_certs=True):
     method = 'GET'
     params = {'format': 'json', 'oauth_callback': 'oob'}
+    # they're really serious about that oob
     full_url = request_token_url + "&" + urllib.urlencode(params)
     client = OAClient(consumer_key, client_secret=consumer_secret,
                       signature_type=SIGNATURE_TYPE_QUERY)
     full_url, headers, body = client.sign(full_url, method)
 
     client = httplib2.Http()
-    client.disable_ssl_certificate_validation = True
+    client.disable_ssl_certificate_validation = not validate_certs
     resp, content = client.request(full_url, method=method)
     try:
         resp_dict = json.loads(content)
@@ -94,25 +101,21 @@ def get_access_token(consumer_key,
                      verifier,
                      access_token_url,
                      validate_certs=True):
-    consumer = oauth.Consumer(consumer_key, consumer_secret)
-    request_token = oauth.Token(req_token_key, req_token_secret)
-    client = oauth.Client(consumer, request_token)
-    client.disable_ssl_certificate_validation = not validate_certs
+    method = 'GET'
+    params = {'format': 'json', 'oauth_callback': 'oob'}
+    # they're really serious about that oob
+    full_url = access_token_url + "&" + urllib.urlencode(params)
+    client = OAClient(consumer_key,
+                      client_secret=consumer_secret,
+                      resource_owner_key=req_token_key,
+                      resource_owner_secret=req_token_secret,
+                      verifier=verifier,
+                      signature_type=SIGNATURE_TYPE_QUERY)
+    full_url, headers, body = client.sign(full_url, method)
 
-    params = {'format': 'json',
-              'oauth_version': '1.0',
-              'oauth_nonce': oauth.generate_nonce(),
-              'oauth_timestamp': int(time.time()),
-              'oauth_verifier': verifier,
-              'oauth_callback': 'oob'}
-    # wow, all those keys are really necessary
-    # otherwise you get a really opaque '{"error":"mwoauth-oauth-exception"}'
-    req = oauth.Request('GET', access_token_url, params)
-    signing_method = oauth.SignatureMethod_HMAC_SHA1()
-    req.sign_request(signing_method, consumer, request_token)
-    full_url = req.to_url()
-    # wow
-    resp, content = httplib2.Http.request(client, full_url, method='GET')
+    client = httplib2.Http()
+    client.disable_ssl_certificate_validation = not validate_certs
+    resp, content = client.request(full_url, method=method)
     try:
         resp_dict = json.loads(content)
         acc_token_key, acc_token_secret = resp_dict['key'], resp_dict['secret']
