@@ -6,7 +6,10 @@ import urllib
 
 import httplib2
 import oauth2 as oauth
+
+import oauthlib
 from oauthlib.oauth1 import Client as OAClient
+from oauthlib.oauth1 import SIGNATURE_TYPE_QUERY
 
 from pprint import pformat
 
@@ -16,6 +19,12 @@ from pprint import pformat
 # retrieve request token from session
 # using verifier, build access token request
 # get access token, save to session
+
+try:
+    oauthlib.common.urlencoded.add(':')  # idc anymore
+    oauthlib.common.urlencoded.add('/')  # idc anymore
+except:
+    raise
 
 
 def make_api_call(consumer_key,
@@ -59,19 +68,16 @@ def get_request_token(consumer_key,
                       consumer_secret,
                       request_token_url,
                       validate_certs=True):
-    consumer = oauth.Consumer(consumer_key, consumer_secret)
-    client = oauth.Client(consumer)
-    client.disable_ssl_certificate_validation = not validate_certs
-    params = {'format': 'json',
-              'oauth_version': '1.0',
-              'oauth_nonce': oauth.generate_nonce(),
-              'oauth_timestamp': int(time.time()),
-              'oauth_callback': 'oob'}  # :/
-    req = oauth.Request('GET', request_token_url, params)
-    signing_method = oauth.SignatureMethod_HMAC_SHA1()
-    req.sign_request(signing_method, consumer, None)
-    full_url = req.to_url()
-    resp, content = httplib2.Http.request(client, full_url, method='GET')
+    method = 'GET'
+    params = {'format': 'json', 'oauth_callback': 'oob'}
+    full_url = request_token_url + "&" + urllib.urlencode(params)
+    client = OAClient(consumer_key, client_secret=consumer_secret,
+                      signature_type=SIGNATURE_TYPE_QUERY)
+    full_url, headers, body = client.sign(full_url, method)
+
+    client = httplib2.Http()
+    client.disable_ssl_certificate_validation = True
+    resp, content = client.request(full_url, method=method)
     try:
         resp_dict = json.loads(content)
         req_token_key, req_token_secret = resp_dict['key'], resp_dict['secret']
