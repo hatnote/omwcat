@@ -9,8 +9,10 @@ from clastic import (redirect,
                      Middleware,
                      Application,
                      render_basic,
-                     GetParamMiddleware)
+                     GetParamMiddleware,
+                     POST)
 from clastic.middleware.cookie import SignedCookieMiddleware
+from clastic.middleware.form import PostDataMiddleware
 
 from mwoauth import get_request_token, get_access_token, make_api_call
 
@@ -23,6 +25,16 @@ DEFAULT_BASE_URL = 'https://www.mediawiki.org/w/index.php?title=Special:OAuth'
 DEFAULT_REQ_TOKEN_URL = DEFAULT_BASE_URL + '/initiate'
 DEFAULT_AUTHZ_URL = DEFAULT_BASE_URL + '/authorize'
 DEFAULT_TOKEN_URL = DEFAULT_BASE_URL + '/token'
+
+
+class MediaWikiError(Exception):
+    def __init__(self, error):
+        self.code = error['code']
+        self.info = error['info']
+        Exception.__init__(self, self.code)
+
+    def __str__(self):
+        return repr('%s: %s' % (self.code, self.info))
 
 
 class SessionMiddleware(Middleware):
@@ -96,6 +108,63 @@ def get_user_info(session, consumer_key, consumer_secret, api_url):
                             api_url)
     return content
 
+def get_edit_token(session, consumer_key, consumer_secret, api_url):
+    token_params = {
+        'action': 'tokens',
+        'type': 'edit'
+    }
+    access_token_key = session['token_key']
+    access_token_secret = session['token_secret']
+    token_resp = make_api_call(consumer_key,
+                               consumer_secret,
+                               access_token_key,
+                               access_token_secret,
+                               'GET',
+                               token_params,
+                               api_url)
+    token = json.loads(token_resp)['tokens']['edittoken']
+    # what if we get an empty token?
+    return token
+
+def post_new_section(page_title,
+                     section_title,
+                     text,
+                     summary,
+                     session,
+                     consumer_key,
+                     consumer_secret,
+                     api_url):
+
+    access_token_key = session['token_key']
+    access_token_secret = session['token_secret']
+    token = get_edit_token(session,
+                           consumer_key,
+                           consumer_secret,
+                           api_url)
+    params = {
+        'action': 'edit',
+        'title': page_title,
+        'section': 'new',
+        'sectiontitle': section_title,
+        'text': text,
+        'summary': summary,
+        'watchlist': 'nochange',
+        'token': token
+    }
+    edit_resp = make_api_call(consumer_key,
+                              consumer_secret,
+                              access_token_key,
+                              access_token_secret,
+                              'POST',
+                              params,
+                              api_url)
+    edit_resp = json.loads(edit_resp)
+    if edit_resp.get('error'):
+        raise MediaWikiError(edit_resp['error'])
+    if edit_resp['edit']['result'] == 'Success':
+        print 'Successfully edited %s' % edit_resp['edit']['title']
+    return edit_resp
+
 
 def home(session):
     import time
@@ -113,10 +182,21 @@ def home(session):
 
 def create_app(consumer_key, consumer_secret):
     ui_redirector = lambda context: redirect('/userinfo')
+
+    new_section_pdm = PostDataMiddleware({
+        'page_title': unicode,
+        'section_title': unicode,
+        'text': unicode,
+        'summary': unicode
+    })
+
+    new_section_route = POST('/new_section', post_new_section, render_basic, middlewares=[new_section_pdm])
+
     routes = [('/', home, render_basic),
               ('/userinfo', get_user_info, render_basic),
               ('/auth/authorize', authorize, render_basic),
-              ('/auth/callback', authorize_complete, ui_redirector)]
+              ('/auth/callback', authorize_complete, ui_redirector),
+              new_section_route]
 
     resources = {'consumer_key': consumer_key,
                  'consumer_secret': consumer_secret,
